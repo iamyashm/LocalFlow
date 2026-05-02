@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py -m py_compile config.py text_injector.py main.py)",
+      "Bash(py -m py_compile transcriber.py text_injector.py main.py)",
+      "Bash(py -m py_compile main.py transcriber.py vad.py text_postprocess.py tray.py feedback.py)",
+      "Bash(py -m py_compile main.py overlay.py config.py transcriber.py vad.py text_postprocess.py)",
+      "Bash(py -m py_compile main.py overlay.py focus.py text_injector.py config.py)",
+      "Bash(py -m py_compile main.py overlay.py text_postprocess.py config.py text_injector.py focus.py)",
+      "Bash(py -c ' *)",
+      "Bash(py -m pip show keyboard)",
+      "Bash(py -c \"import keyboard; print\\(keyboard.__file__\\)\")",
+      "Bash(Scripts/py -c \"import keyboard; print\\(keyboard.__file__\\)\")",
+      "Bash(Scripts/python.exe -c \"import keyboard; print\\(keyboard.__file__\\)\")",
+      "Bash(py -c \"import sys; sys.path.insert\\(0,'Scripts'\\); import keyboard; print\\(keyboard.__file__\\)\")",
+      "Bash(/c/Users/Yash Maniramka/stt_tool/Scripts/python.exe *)",
+      "Bash(cmd.exe *)"
+    ]
+  }
+}
