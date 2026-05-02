@@ -41,8 +41,7 @@ def inject_text(text, target_hwnd=None, restore_clipboard=True):
 
     Returns True if the paste shortcut was dispatched, False otherwise.
     """
-    text = (text or "").strip()
-    if not text:
+    if not text or not text.strip():
         return False
 
     prev_clip = None

@@ -26,3 +26,16 @@ MIN_RECORD_SECONDS = 0.3
 # Streaming paste: how often the worker fires and how much context it feeds Whisper.
 STREAM_HOP_SECONDS    = 3.0   # seconds of new audio before each intermediate paste
 STREAM_WINDOW_SECONDS = 6.0   # total context window size (hop + lookback overlap)
+
+# Map lowercase substrings of window titles to short Whisper prompt prefixes.
+# Whisper uses these to bias vocabulary and style toward the target context.
+APP_PROMPTS: dict[str, str] = {
+    "outlook":  "Professional email.",
+    "teams":    "Chat message.",
+    "slack":    "Chat message.",
+    "word":     "Document.",
+    "notion":   "Document.",
+    "code":     "Code comment.",
+    "notepad":  "Note.",
+    "obsidian": "Note.",
+}

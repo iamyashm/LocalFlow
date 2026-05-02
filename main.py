@@ -90,6 +90,10 @@ class DictationSession:
         self._stream_prev_merged = ""  # dedup-merged transcript so far
         self._pre_dictation_clip = None  # clipboard contents before session started
 
+        # --- Burst-joining state ---
+        self._last_char_pasted: str = ""      # last non-whitespace char successfully pasted
+        self._session_first_paste: bool = True  # reset on each key-down
+
     def _set_state(self, state):
         if self._on_state_change is not None:
             try:
@@ -107,6 +111,21 @@ class DictationSession:
         if self.apply_punct:
             text = apply_punctuation(text)
         return text
+
+    def _context_prompt(self) -> str:
+        title = self._target_title.lower()
+        for key, prompt in config.APP_PROMPTS.items():
+            if key in title:
+                return prompt
+        return ""
+
+    def _apply_join(self, text: str) -> str:
+        """Prepend a space and fix capitalisation so consecutive PTT bursts join naturally."""
+        if not self._session_first_paste or not self._last_char_pasted or not text:
+            return text
+        if self._last_char_pasted in ".?!":
+            return " " + text[0].upper() + text[1:]
+        return " " + text[0].lower() + text[1:]
 
     def _has_speech(self, audio_16k):
         """Speech-presence check: cheap RMS first, then VAD if available."""
@@ -140,8 +159,12 @@ class DictationSession:
                 return
             self.recording = True
             self._chunks = []
-            self._target_hwnd = get_foreground_hwnd()
+            new_hwnd = get_foreground_hwnd()
+            if new_hwnd != self._target_hwnd:
+                self._last_char_pasted = ""   # different window — don't auto-join
+            self._target_hwnd = new_hwnd
             self._target_title = get_window_title(self._target_hwnd)
+            self._session_first_paste = True
             print(f"[hotkey] down — target: {self._target_title!r}", flush=True)
             self._collect_stop.clear()
             self._started_at = datetime.now()
@@ -284,12 +307,14 @@ class DictationSession:
             audio_16k = self._prepare_audio(audio_16k)
             print(f"[...] transcribing {duration:.1f}s...", flush=True)
             t0 = time.monotonic()
-            text = self.transcriber.transcribe(audio_16k).strip()
+            text = self.transcriber.transcribe(audio_16k,
+                initial_prompt=self._context_prompt()).strip()
             dt = time.monotonic() - t0
             text = self._clean_text(text)
             if not text:
                 print(f"[!] no speech recognized ({dt:.2f}s).")
                 return
+            text = self._apply_join(text)
             preview = text if len(text) <= 100 else text[:97] + "..."
             print(f"[OK] {dt:.2f}s -> {preview!r}")
             ok = inject_text(
@@ -298,6 +323,10 @@ class DictationSession:
                 restore_clipboard=self.restore_clipboard,
             )
             if ok:
+                self._session_first_paste = False
+                tail = text.rstrip()
+                if tail:
+                    self._last_char_pasted = tail[-1]
                 print(f"[+] pasted {len(text)} chars into {self._target_title!r}")
             else:
                 print("[!] paste failed — text on clipboard, press Ctrl+V manually.")
@@ -348,8 +377,10 @@ class DictationSession:
 
         # Use prev_merged_base as initial_prompt so Whisper continues
         # naturally from where the stream worker left off.
+        ctx            = self._context_prompt()
         prompt_words   = prev_merged_base.split()
-        initial_prompt = " ".join(prompt_words[-50:]) if prompt_words else ""
+        history        = " ".join(prompt_words[-50:]) if prompt_words else ""
+        initial_prompt = (ctx + " " + history).strip() if ctx else history
 
         t0   = time.monotonic()
         text = self.transcriber.transcribe(remaining_16k, initial_prompt=initial_prompt)
@@ -364,6 +395,8 @@ class DictationSession:
         final_delta = self._safe_delta(prev_merged_base, text)
 
         if final_delta.strip():
+            if self._session_first_paste:
+                final_delta = self._apply_join(final_delta)
             print(f"[stream] final {len(final_delta)} chars — pasting...", flush=True)
             ok = inject_text(
                 final_delta,
@@ -372,6 +405,10 @@ class DictationSession:
             )
             total = len(prev_merged_base) + len(final_delta)
             if ok:
+                self._session_first_paste = False
+                tail = final_delta.rstrip()
+                if tail:
+                    self._last_char_pasted = tail[-1]
                 print(f"[+] done — {total} total chars into {self._target_title!r}")
             else:
                 print("[!] final paste failed — text on clipboard, press Ctrl+V.")
@@ -444,8 +481,10 @@ class DictationSession:
 
             # Build a short trailing prompt (≤50 words) so Whisper continues
             # naturally without re-transcribing what was already pasted.
+            ctx = self._context_prompt()
             prompt_words = prev_pasted.split()
-            initial_prompt = " ".join(prompt_words[-50:]) if prompt_words else ""
+            history = " ".join(prompt_words[-50:]) if prompt_words else ""
+            initial_prompt = (ctx + " " + history).strip() if ctx else history
 
             text = self.transcriber.transcribe(window_16k, initial_prompt=initial_prompt)
             text = self._clean_text(text)
@@ -458,8 +497,15 @@ class DictationSession:
             # (Whisper respects initial_prompt but occasionally echoes 1-2 words).
             delta = self._safe_delta(prev_pasted, text)
             if delta.strip():
+                if self._session_first_paste:
+                    delta = self._apply_join(delta)
                 prev_pasted += delta
                 ok = paste_delta_fast(delta, target_hwnd=self._target_hwnd)
+                if ok:
+                    self._session_first_paste = False
+                    tail = delta.rstrip()
+                    if tail:
+                        self._last_char_pasted = tail[-1]
                 print(
                     f"[stream] {len(delta)} chars pasted" + ("" if ok else " (FAILED)"),
                     flush=True,
@@ -713,8 +759,17 @@ def main():
         print(f"[!] Model directory not found: {model_path}", file=sys.stderr)
         sys.exit(2)
 
+    vocab_prompt = ""
+    _vocab_path = Path(__file__).resolve().parent / "vocab.txt"
+    if _vocab_path.exists():
+        _terms = [l.strip() for l in _vocab_path.read_text(encoding="utf-8").splitlines()
+                  if l.strip() and not l.startswith("#")]
+        vocab_prompt = ", ".join(_terms)
+        print(f"[*] Vocab:             {len(_terms)} terms from vocab.txt")
+
     transcriber = WhisperTranscriber(
-        model_path, device=args.device, language=config.LANGUAGE
+        model_path, device=args.device, language=config.LANGUAGE,
+        vocab_prompt=vocab_prompt,
     )
     if not args.no_warmup:
         transcriber.warmup()
