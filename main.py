@@ -680,7 +680,9 @@ def parse_args():
     p.add_argument("--no-overlay", action="store_true",
                    help="Disable the floating audio-level overlay (headless mode).")
     p.add_argument("--no-denoise", action="store_true",
-                   help="Disable spectral noise reduction (faster on weak CPUs).")
+                   help="(Deprecated — noise reduction is now off by default; this flag is a no-op.)")
+    p.add_argument("--denoise", action="store_true",
+                   help="Enable spectral noise reduction (~30ms/window; useful in noisy environments).")
     p.add_argument("--handsfree-hotkey", default=config.DEFAULT_HANDSFREE_HOTKEY,
                    help="Hands-free upgrade combo. Keys beyond --hotkey that, when added "
                         "while holding PTT, upgrade the session to hands-free mode. "
@@ -734,7 +736,7 @@ def main():
     _ov_level = overlay.set_level if overlay is not None else None
 
     denoiser = None
-    if _HAS_DENOISER and not args.no_denoise:
+    if _HAS_DENOISER and args.denoise:
         try:
             denoiser = Denoiser()
         except Exception as e:
@@ -780,7 +782,7 @@ def main():
     print(f"[*] Mode:              {mode_str}")
     print(f"[*] VAD:               {'on (aggr=' + str(args.vad_aggressiveness) + ')' if not args.no_vad else 'off'}")
     print(f"[*] Voice punct:       {'on' if not args.no_punctuation else 'off'}")
-    print(f"[*] Noise reduction:   {'on' if denoiser is not None else 'off (--no-denoise or noisereduce not installed)'}")
+    print(f"[*] Noise reduction:   {'on' if denoiser is not None else 'off (use --denoise to enable)'}")
     print(f"[*] Overlay:           {'on' if use_overlay else 'off'}")
     if args.save:
         print(f"[*] Debug save dir:    {args.save_dir}")

@@ -14,7 +14,8 @@
       "Bash(Scripts/python.exe -c \"import keyboard; print\\(keyboard.__file__\\)\")",
       "Bash(py -c \"import sys; sys.path.insert\\(0,'Scripts'\\); import keyboard; print\\(keyboard.__file__\\)\")",
       "Bash(/c/Users/Yash Maniramka/stt_tool/Scripts/python.exe *)",
-      "Bash(cmd.exe *)"
+      "Bash(cmd.exe *)",
+      "Bash(py -3 -m pip show soundcard)"
     ]
   }
 }

@@ -17,7 +17,7 @@ import pyperclip
 from focus import restore_foreground
 
 
-PRE_PASTE_DELAY_S = 0.05
+PRE_PASTE_DELAY_S = 0.030
 POST_PASTE_DELAY_S = 0.20
 
 

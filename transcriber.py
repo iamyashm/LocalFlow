@@ -1,5 +1,6 @@
 """OpenVINO GenAI Whisper wrapper. Loaded once and reused for the whole session."""
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -10,7 +11,11 @@ class WhisperTranscriber:
     def __init__(self, model_path, device="GPU", language="<|en|>"):
         print(f"[*] Loading Whisper model from: {model_path}")
         print(f"[*] Device: {device}")
-        self.pipeline = ov_genai.WhisperPipeline(str(model_path), device=device)
+        cache_dir = Path.home() / ".cache" / "localflow_ov"
+        self.pipeline = ov_genai.WhisperPipeline(
+            str(model_path), device=device,
+            CACHE_DIR=str(cache_dir),
+        )
         self.config = self.pipeline.get_generation_config()
         for attr, value in (
             ("language", language),
