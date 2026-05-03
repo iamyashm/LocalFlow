@@ -25,4 +25,6 @@ transcript_*.txt
 Thumbs.db
 .DS_Store
 
-.claude
+.claude/settings.local.json
+
+vocab.txt

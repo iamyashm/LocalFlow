@@ -9,7 +9,7 @@ DEFAULT_DEVICE = "GPU"
 # (especially the Windows key) are fragile because suppressing the release
 # event leaves the OS thinking the modifier is still held. 
 DEFAULT_HOTKEY            = "right ctrl+right alt"
-DEFAULT_HANDSFREE_HOTKEY  = "right ctrl+right alt+space"
+DEFAULT_HANDSFREE_HOTKEY  = "right ctrl+right alt+win"
 
 SAMPLE_RATE = 16000
 NATIVE_SAMPLE_RATE = 48000
@@ -39,3 +39,8 @@ APP_PROMPTS: dict[str, str] = {
     "notepad":  "Note.",
     "obsidian": "Note.",
 }
+
+# LLM text refinement.  Place the model folder next to this file (or override with
+# --enhance-model).  If the path exists, refinement runs automatically.
+DEFAULT_ENHANCE_MODEL_PATH = Path("qwen3-1.7b-int8-ov")
+ENHANCE_TIMEOUT_S = 8.0   # hard budget per transcription; falls back to unrefined text

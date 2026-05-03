@@ -27,6 +27,7 @@ from transcriber import WhisperTranscriber
 from text_injector import inject_text, paste_delta_fast
 from focus import get_foreground_hwnd, get_window_title
 from text_postprocess import is_hallucination, apply_punctuation
+from refiner import TextRefiner
 from vad import VAD
 
 try:
@@ -49,7 +50,7 @@ class DictationSession:
                  restore_clipboard=True, save_to_file=False, transcript_dir=None,
                  streaming=False, vad=None, apply_punct=True,
                  on_state_change=None, on_level=None, record_label="recording",
-                 denoiser=None):
+                 denoiser=None, refiner=None):
         self.transcriber = transcriber
         self.capturer = capturer
         self.hotkey_label = hotkey_label
@@ -63,6 +64,7 @@ class DictationSession:
         self._on_level = on_level
         self._record_label = record_label
         self._denoiser = denoiser
+        self._refiner = refiner
 
         self.recording = False
         self._lock = threading.Lock()
@@ -169,17 +171,18 @@ class DictationSession:
             self._collect_stop.clear()
             self._started_at = datetime.now()
 
+            if self.restore_clipboard:
+                try:
+                    self._pre_dictation_clip = pyperclip.paste()
+                except Exception:
+                    self._pre_dictation_clip = None
+
             if self.streaming:
                 with self._buf_lock:
                     self._buf = np.empty(0, dtype=np.float32)
                     self._stream_consumed = 0
                     self._stream_prev_merged = ""
                 self._stream_stop.clear()
-                if self.restore_clipboard:
-                    try:
-                        self._pre_dictation_clip = pyperclip.paste()
-                    except Exception:
-                        self._pre_dictation_clip = None
 
             self.capturer.start()
             self._collector = threading.Thread(
@@ -314,13 +317,17 @@ class DictationSession:
             if not text:
                 print(f"[!] no speech recognized ({dt:.2f}s).")
                 return
+            if self._refiner is not None:
+                t0_r = time.monotonic()
+                text = self._refiner.refine(text, self._context_prompt(), config.ENHANCE_TIMEOUT_S)
+                print(f"[refine] {time.monotonic() - t0_r:.2f}s", flush=True)
             text = self._apply_join(text)
             preview = text if len(text) <= 100 else text[:97] + "..."
             print(f"[OK] {dt:.2f}s -> {preview!r}")
             ok = inject_text(
                 text,
                 target_hwnd=self._target_hwnd,
-                restore_clipboard=self.restore_clipboard,
+                restore_clipboard=False,  # session restores clipboard via _restore_pre_dictation_clip
             )
             if ok:
                 self._session_first_paste = False
@@ -332,6 +339,7 @@ class DictationSession:
                 print("[!] paste failed — text on clipboard, press Ctrl+V manually.")
             if self.save_to_file and self.transcript_dir is not None:
                 self._save(text)
+            self._restore_pre_dictation_clip()
             return
 
         # ── STREAMING MODE ────────────────────────────────────────────────
@@ -421,13 +429,21 @@ class DictationSession:
             self._save(prev_merged_base + final_delta)
 
     def _restore_pre_dictation_clip(self):
-        if self.restore_clipboard and self._pre_dictation_clip is not None:
-            time.sleep(0.15)   # let target app finish consuming the last paste
+        if not self.restore_clipboard or self._pre_dictation_clip is None:
+            return
+        clip = self._pre_dictation_clip
+        self._pre_dictation_clip = None
+
+        def _do_restore():
+            # 1-second delay: apps like Outlook read the clipboard asynchronously
+            # after receiving Ctrl+V; a shorter delay causes them to paste stale content.
+            time.sleep(1.0)
             try:
-                pyperclip.copy(self._pre_dictation_clip)
+                pyperclip.copy(clip)
             except Exception:
                 pass
-            self._pre_dictation_clip = None
+
+        threading.Thread(target=_do_restore, daemon=True, name="ClipRestore").start()
 
     def _collect(self):
         while not self._collect_stop.is_set():
@@ -743,6 +759,11 @@ def parse_args():
                    help="WebRTC VAD aggressiveness: 0 (least, lets through more) ... 3 (most strict). Default: 2.")
     p.add_argument("--no-warmup", action="store_true",
                    help="Skip model warmup (first transcription will be slower).")
+    p.add_argument("--no-enhance", action="store_true",
+                   help="Disable LLM text refinement even if the model directory exists.")
+    p.add_argument("--enhance-model", default=str(config.DEFAULT_ENHANCE_MODEL_PATH),
+                   help=f"Path to OpenVINO LLM model directory for text refinement "
+                        f"(default: {config.DEFAULT_ENHANCE_MODEL_PATH}).")
     return p.parse_args()
 
 
@@ -773,6 +794,15 @@ def main():
     )
     if not args.no_warmup:
         transcriber.warmup()
+
+    refiner = None
+    enhance_path = Path(args.enhance_model)
+    if not args.no_enhance and enhance_path.exists():
+        refiner = TextRefiner(enhance_path, device=args.device, vocab_hint=vocab_prompt)
+    elif not args.no_enhance and not enhance_path.exists():
+        print(f"[*] Refiner:           off (model not found at {enhance_path})")
+        print(f"    To enable: huggingface-cli download OpenVINO/Qwen3-1.7B-int8-ov "
+              f"--local-dir {enhance_path}")
     capturer = MicrophoneCapturer()
     vad = VAD(aggressiveness=args.vad_aggressiveness, enabled=not args.no_vad)
     streaming = args.stream
@@ -811,6 +841,7 @@ def main():
         on_level=_ov_level,
         record_label="recording",
         denoiser=denoiser,
+        refiner=refiner,
     )
 
     # Derive the upgrade keys: keys in the HF combo not in the PTT combo.
@@ -838,6 +869,7 @@ def main():
     print(f"[*] VAD:               {'on (aggr=' + str(args.vad_aggressiveness) + ')' if not args.no_vad else 'off'}")
     print(f"[*] Voice punct:       {'on' if not args.no_punctuation else 'off'}")
     print(f"[*] Noise reduction:   {'on' if denoiser is not None else 'off (use --denoise to enable)'}")
+    print(f"[*] LLM refiner:       {'on (' + str(enhance_path) + ')' if refiner else 'off'}")
     print(f"[*] Overlay:           {'on' if use_overlay else 'off'}")
     if args.save:
         print(f"[*] Debug save dir:    {args.save_dir}")
